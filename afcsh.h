@@ -6,9 +6,8 @@
 
 /* Constants */
 #define JAILED_DIR "/"
-#define STR_BUFSIZE 512
-#define AFCSH_CWD_BUFSIZE 128
-#define AFCSH_PREFIX_BUFSIZE 256
+#define AFCSH_CWD_BUFSIZE 256
+#define AFCSH_PREFIX_BUFSIZE 512
 #define AFCSH_RL_BUFSIZE 1024
 #define AFCSH_TOK_BUFSIZE 64
 #define AFCSH_PATH_TOK_BUFSIZE 64
@@ -40,10 +39,9 @@ static int afcsh_num_commands(void);
 static int afcsh_execute(char **args, char *cwd);
 
 static char *create_full_path(char *filename, char *cwd);
-static char *parse_special_path(char *path);
 
 static status_t read_file_at_path(uint8_t *bytes, size_t size, const char *path);
-static status_t create_file_info(afc_file_info *file_info, char *path);
+static status_t create_file_info(afc_file_info *file_info, const char *path);
 static status_t create_file_at_path(uint8_t *bytes, size_t size, const char *path);
 
 /* Internal builtins */

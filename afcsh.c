@@ -11,14 +11,16 @@
 #include "core_foundation_utils.h"
 #include "ext_string.h"
 
-#define ASSERT_ALLOC(ptr) if(ptr == NULL) { fprintf(stderr, "afcsh: allocation error\n"); exit(EXIT_FAILURE); }
-#define ASSERT_PATH() fprintf(stderr, "afcsh: path error\n"); exit(EXIT_FAILURE);
+#define ASSERT_ALLOC(ptr) if(ptr == NULL) { (void)fprintf(stderr, "afcsh: allocation error\n"); exit(EXIT_FAILURE); }
+#define ASSERT_OVERFLOW() (void)fprintf(stderr, "afcsh: value is too large for assigned buffer\n"); exit(EXIT_FAILURE);
+#define ASSERT_MD_ERROR(ret) if(ret != MDERR_OK) { (void)fprintf(stderr, "afcsh: mobile device framework error\n"); exit(EXIT_FAILURE); }
 
 // Relevant info of our current device
 const char* device_name;
 
 // Relevant structs for AFC
 struct afc_connection *afc;
+
 
 int main(void) {
     void *mobile_device_framework = dlopen("/System/Library/PrivateFrameworks/MobileDevice.framework/MobileDevice", RTLD_NOW);
@@ -46,14 +48,14 @@ int main(void) {
     AFCRemovePath = dlsym(mobile_device_framework, "AFCRemovePath"); 
     AFCRenamePath = dlsym(mobile_device_framework, "AFCRenamePath");
 
-    fprintf(stdout, "afcsh: waiting for iOS device\n");
+    (void)fprintf(stdout, "afcsh: waiting for iOS device\n");
 
-    am_device_notification *notification;
-	AMDeviceNotificationSubscribe(device_notification_callback, 0, 0, NULL, &notification);
-
+    struct am_device_notification *notification;
+	
+    ASSERT_MD_ERROR(AMDeviceNotificationSubscribe(device_notification_callback, 0, 0, NULL, &notification));
     CFRunLoopRun();
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 char *afcsh_cmd_str[] = {
@@ -93,7 +95,7 @@ status_t (*afcsh_cmd_func[]) (char **, char *) = {
 static void device_notification_callback(am_device_notification_callback_info *info, void *unused) 
 {
 	if (info->msg != ADNCI_MSG_CONNECTED) { 
-        fprintf(stderr, "afcsh: device disconnected");
+        (void)fprintf(stderr, "afcsh: device disconnected");
         exit(EXIT_FAILURE);
     }
 
@@ -101,8 +103,8 @@ static void device_notification_callback(am_device_notification_callback_info *i
     device = info->dev;
     
     //Establish apple mobile device connection 
-    AMDeviceConnect(device);
-	AMDeviceStartSession(device);
+    ASSERT_MD_ERROR(AMDeviceConnect(device));
+	ASSERT_MD_ERROR(AMDeviceStartSession(device));
 
     //Get some device information (product name and firmware version)
     CFStringRef deviceInfo;
@@ -114,13 +116,14 @@ static void device_notification_callback(am_device_notification_callback_info *i
 
     //Start apple file conduit on the device and open a connection
     service_conn_t afc_conn;
-    AMDeviceStartService(device, CFSTR("com.apple.afc"), &afc_conn, NULL);
-    AFCConnectionOpen(afc_conn, 0, &afc);
+    ASSERT_MD_ERROR(AMDeviceStartService(device, CFSTR("com.apple.afc"), &afc_conn, NULL));
+    ASSERT_MD_ERROR(AFCConnectionOpen(afc_conn, 0, &afc));
 
     afcsh_loop();
-    fprintf(stdout, "afcsh: terminating connection to %s\n", device_name);
 
-    close(afc_conn);
+    (void)fprintf(stdout, "afcsh: terminating connection to %s\n", device_name);
+    (void)close(afc_conn);
+
     CFRelease(deviceInfo);
     exit(EXIT_SUCCESS);
 }
@@ -197,17 +200,16 @@ static char **tokenize_path(char *path, size_t *num_tokens) {
 
 
 static char *get_shell_prefix(const char *device_name, const char *cwd) {
-    size_t prefix_capacity = AFCSH_PREFIX_BUFSIZE * sizeof(char) + 1;
-    char *prefix = malloc(prefix_capacity);
+    char *prefix = calloc(AFCSH_PREFIX_BUFSIZE + 1, sizeof(char));
     ASSERT_ALLOC(prefix);
 
     bool is_home = (strcmp(cwd, JAILED_DIR) == 0);
-    snprintf(prefix, prefix_capacity, "%s %s $ ", device_name, is_home ? "~" : cwd);
+    snprintf(prefix, AFCSH_PREFIX_BUFSIZE - 1, "%s %s $ ", device_name, is_home ? "~" : cwd);
 
     return prefix;
 }
 
-static status_t create_file_info(afc_file_info *file_info, char *path) {
+static status_t create_file_info(afc_file_info *file_info, const char *path) {
     struct afc_dictionary* file_attributes;
     if(AFCFileInfoOpen(afc, path, &file_attributes) != MDERR_OK){
         return E_NO_SUCH_FILE_OR_DIRECTORY;
@@ -225,7 +227,7 @@ static status_t create_file_info(afc_file_info *file_info, char *path) {
             } else if(strcmp(value, "S_IFLNK") == 0) {
                 file_info->a_st_ifmt = S_IFLNK;
             } else {
-                fprintf(stderr, "create_file_info: unknown file format %s\n", value);
+                (void)fprintf(stderr, "create_file_info: unknown file format %s\n", value);
                 return E_NOT_IMPLEMENTED;
             }
 
@@ -240,69 +242,35 @@ static status_t create_file_info(afc_file_info *file_info, char *path) {
         } else if(strcmp(key, ST_BIRTHTIME) == 0) {
             file_info->a_st_birthtime = strtol(value, NULL, 10) / 1000000000; //Convert from nanoseconds to seconds
         } else {
-            fprintf(stderr, "create_file_info: unknown attribute %s\n", key);
+            (void)fprintf(stderr, "create_file_info: unknown attribute %s\n", key);
             return E_NOT_IMPLEMENTED;
         }
 
         position++;
     }
 
-    AFCKeyValueClose(file_attributes);
+    ASSERT_MD_ERROR(AFCKeyValueClose(file_attributes));
     return SUCCESS;
 }
 
-static status_t set_cwd(char *cwd, char *arg) {
-    //If arg is our home directory, simply go there directly
-    if(strcmp(arg, JAILED_DIR) == 0){
-        strcpy(cwd, JAILED_DIR);
+static status_t set_cwd(char *cwd, char *new_path) {
+    //If new_path is our home directory, simply go there directly
+    if(strcmp(new_path, JAILED_DIR) == 0){
+        (void)strcpy(cwd, JAILED_DIR);
         return SUCCESS;
     }
 
-    size_t arg_len = strlen(arg);
-    size_t cwd_len = strlen(cwd);
-    size_t new_path_capacity = (arg_len + cwd_len) * sizeof(char) + 1;
-    
-    if(new_path_capacity >= AFCSH_CWD_BUFSIZE) {
+    if(strlen(new_path) + 1 > AFCSH_CWD_BUFSIZE) {
         return E_VALUE_TOO_LONG;
-    }
-
-    //Remove trailing '/' from arg
-    if(arg[arg_len - 1] == '/') {
-        arg = rtrim(arg, 1);
-    }
-
-    //Allocate memory for new wd and copy cwd to it
-    char *new_path = malloc(new_path_capacity);
-    ASSERT_ALLOC(new_path);
-
-    strncpy(new_path, cwd, cwd_len);
-
-    if(strcmp(cwd, JAILED_DIR) == 0) {
-        //If we are in our home directory, append arg without the leading '/'
-        if(arg[0] == '/'){
-            arg = ltrim(arg, 1);
-        }
-        strncat(new_path, arg, new_path_capacity); 
-    } else {
-        //If we are not in our home directory...
-        //If arg has a leading '/', copy the whole new path to cwd (absolute path)
-        if(arg[0] == '/') {
-            strncpy(new_path, arg, new_path_capacity); 
-        } else {
-            //If arg has not leading '/', prepand it and then prepend arg (relative path)
-            strncat(new_path, "/", 1);
-            strncat(new_path, arg, new_path_capacity); 
-        }
     }
 
     //Try to open the new cwd
     struct afc_directory* directory;
     if(AFCDirectoryOpen(afc, new_path, &directory) != MDERR_OK) {
         struct afc_file_info file_info;
+        
         status_t status_file_info = create_file_info(&file_info, new_path);
-
         if(status_file_info != SUCCESS) {
-            free(new_path);
             return status_file_info;
         }
 
@@ -314,14 +282,11 @@ static status_t set_cwd(char *cwd, char *arg) {
             }
         }
         
-        free(new_path);
         return status_directory;
     }
 
     //Finally, copy the new path into cwd.
-    strncpy(cwd, new_path, AFCSH_CWD_BUFSIZE);
-
-    free(new_path);
+    (void)strlcpy(cwd, new_path, AFCSH_CWD_BUFSIZE);
     return SUCCESS;
 }
 
@@ -329,27 +294,22 @@ static status_t read_file_at_path(uint8_t *bytes, size_t size, const char *path)
     status_t status = SUCCESS;
 
     //Prepare and open remote file
-    afc_file *remote_file = malloc(sizeof(afc_file));
-    ASSERT_ALLOC(remote_file);
+    struct afc_file remote_file;
+    remote_file.mode = 1;
 
-    memset(remote_file, 0, sizeof(afc_file));
-
-    remote_file->mode = 1;
-    if(AFCFileRefOpen(afc, path, 1, &remote_file->file_ref) != MDERR_OK) {
+    if(AFCFileRefOpen(afc, path, 1, &remote_file.file_ref) != MDERR_OK) {
         status = E_COULD_NOT_OPEN_FILE;
         goto read_file_end;
     }
 
     uint64_t items = (uint64_t)size;
-    if(AFCFileRefRead(afc, remote_file->file_ref, bytes, &items) != MDERR_OK){
+    if(AFCFileRefRead(afc, remote_file.file_ref, bytes, &items) != MDERR_OK){
         status = E_COULD_NOT_READ_FILE;
         goto read_file_end;
     }
 
 read_file_end:
-    AFCFileRefClose(afc, remote_file->file_ref);
-    free(remote_file);
-
+    ASSERT_MD_ERROR(AFCFileRefClose(afc, remote_file.file_ref));
     return status;
 }
 
@@ -357,28 +317,23 @@ static status_t create_file_at_path(uint8_t* bytes, size_t size, const char *pat
     status_t status = SUCCESS;
 
     //Prepare and open remote file
-    afc_file *remote_file = malloc(sizeof(afc_file));
-    ASSERT_ALLOC(remote_file);
-
-    memset(remote_file, 0, sizeof(afc_file));
-
-    remote_file->mode = 2;
-    if(AFCFileRefOpen(afc, path, 2, &remote_file->file_ref) != MDERR_OK) {
+    struct afc_file remote_file;
+    remote_file.mode = 2;
+    
+    if(AFCFileRefOpen(afc, path, 2, &remote_file.file_ref) != MDERR_OK) {
         status = E_COULD_NOT_OPEN_FILE;
         goto create_file_end;
     }
 
     if(size > 0) {
-        if(AFCFileRefWrite(afc, remote_file->file_ref, bytes, size) != MDERR_OK) {
+        if(AFCFileRefWrite(afc, remote_file.file_ref, bytes, size) != MDERR_OK) {
             status = E_COULD_NOT_WRITE_FILE;
             goto create_file_end;
         }
     }
 
 create_file_end:
-    AFCFileRefClose(afc, remote_file->file_ref);
-    free(remote_file);
-
+    ASSERT_MD_ERROR(AFCFileRefClose(afc, remote_file.file_ref));
     return status;
 }
 
@@ -401,39 +356,34 @@ static int afcsh_execute(char **args, char *cwd) {
 }
 
 static void afcsh_loop(void) {
-    char *line, *cwd, *shell_prefix;
-    char **args;
-    int status;
-    bool execute = true;
 
-    cwd = malloc(AFCSH_CWD_BUFSIZE * sizeof(char) + 1);
+    char *cwd = calloc(AFCSH_CWD_BUFSIZE + 1, sizeof(char));
     ASSERT_ALLOC(cwd);
 
-    set_cwd(cwd, JAILED_DIR);
+    (void)set_cwd(cwd, JAILED_DIR);
 
+    bool execute = true;
     do {
-        shell_prefix = get_shell_prefix(device_name, cwd);  
-        printf("%s", shell_prefix);
+        char *shell_prefix = get_shell_prefix(device_name, cwd);  
+        (void)printf("%s", shell_prefix);
 
-        line = read_line();
+        char *line = read_line();
         if(strlen(line) > AFCSH_RL_BUFSIZE) {
-            fprintf(stderr, "afcsh: command too long\n");
+            (void)fprintf(stderr, "afcsh: command too long\n");
             continue;
         }
 
-        args = split_line(line);
-
-        status = afcsh_execute(args, cwd);
-
+        char **args = split_line(line);
+        status_t status = afcsh_execute(args, cwd);
         switch(status) {
             case AFCSH_QUIT:
                 execute = false;
                 break;
             case AFCSH_NOT_FOUND:
-                fprintf(stderr, "afcsh: command not found: %s\n", line);
+                (void)fprintf(stderr, "afcsh: command not found: %s\n", line);
                 break;
             case AFCSH_EXIT_FAILURE:
-                //fprintf(stderr, "afcsh: last command had an error\n");
+                //(void)fprintf(stderr, "afcsh: last command had an error\n");
                 break;
         }
 
@@ -449,31 +399,38 @@ static void afcsh_loop(void) {
 //TODO: Fix bug with multiple /../..
 static char *create_full_path(char *filename, char *cwd) {
     size_t len_filename = strlen(filename), len_cwd = strlen(cwd);
-    size_t full_path_capacity = len_filename + len_cwd + 1;
 
-    char *full_path = calloc(full_path_capacity, sizeof(char));
+    char *full_path = calloc(AFCSH_CWD_BUFSIZE, sizeof(char));
     ASSERT_ALLOC(full_path);
     
     //If path starts with '/', use the absolute path
     if(filename[0] == '/') {
-        strncpy(full_path, filename, full_path_capacity);
+        (void)strlcpy(full_path, filename, AFCSH_CWD_BUFSIZE);
     } else {
-        //Create a relative path
-        strncpy(full_path, cwd, full_path_capacity);
+        //... else create a relative path
+        (void)strlcpy(full_path, cwd, AFCSH_CWD_BUFSIZE);
+        
+        //Append traling '/' unless we are in root already
         if(strcmp(cwd, JAILED_DIR) != 0) {
-            strncat(full_path, PATH_DELIM, 1);
+            (void)strcat(full_path, PATH_DELIM);
         }
 
-        strncat(full_path, filename, full_path_capacity - len_cwd);
+        //Append the current path to cwd
+        if(len_filename + 1 > AFCSH_CWD_BUFSIZE - strlen(full_path)) {
+            ASSERT_OVERFLOW();
+        }
+
+        (void)strlcat(full_path, filename, AFCSH_CWD_BUFSIZE - strlen(full_path) - 1);
     }
 
+    //Tokenize the path and parse the special tokens (e.g ., ..) later
     size_t num_tokens = 0;
     char **tokens = tokenize_path(full_path, &num_tokens);
 
-    char *new_path = calloc(full_path_capacity, sizeof(char));
+    char *new_path = calloc(AFCSH_CWD_BUFSIZE, sizeof(char));
     ASSERT_ALLOC(new_path); 
 
-    strcpy(new_path, PATH_DELIM);
+    (void)strcpy(new_path, PATH_DELIM);
 
     bool is_last = false;
     for(int i = 0; i < num_tokens; i++) {
@@ -502,12 +459,18 @@ static char *create_full_path(char *filename, char *cwd) {
             continue;
         }
 
-        //Append token to new_path
-        strncat(new_path, tokens[i], full_path_capacity);
+        //Append token to new_path (+2 to account for the potential last '/' during size check)
+        size_t len_token = strlen(tokens[i]);
+        if(len_token + 2 > AFCSH_CWD_BUFSIZE - strlen(new_path)) {
+            ASSERT_OVERFLOW();
+        }
+        
+        (void)strlcat(new_path, tokens[i], AFCSH_CWD_BUFSIZE - len_token - 1);
 
         //Do not append traling '/' for last token
-        if(!is_last)
-            strcat(new_path, PATH_DELIM);
+        if(!is_last) {
+            (void)strcat(new_path, PATH_DELIM);
+        }
     }
 
     free(tokens);
@@ -519,7 +482,7 @@ static char *create_full_path(char *filename, char *cwd) {
 //Command implementaions
 static status_t afcsh_change_directory(char **args, char *cwd) {
     if(args[1] == NULL) {
-        set_cwd(cwd, JAILED_DIR);
+        (void)set_cwd(cwd, JAILED_DIR);
         return AFCSH_EXIT_SUCCESS;
     }
 
@@ -537,7 +500,7 @@ static status_t afcsh_change_directory(char **args, char *cwd) {
 }
 
 static status_t afcsh_print_working_directory(char **args, char *cwd) {
-    fprintf(stdout, "%s\n", cwd);
+    (void)fprintf(stdout, "%s\n", cwd);
     return AFCSH_EXIT_SUCCESS;
 }
 
@@ -545,11 +508,12 @@ static status_t afcsh_list(char **args, char *cwd) {
     char *full_path = NULL, *effective_path = cwd;
 
     if(args[1] != NULL) {
-        char *full_path = create_full_path(args[1], cwd);
+        full_path = create_full_path(args[1], cwd);
         effective_path = full_path;
     }
 
     struct afc_file_info file_info;
+
     status_t file_info_status = create_file_info(&file_info, effective_path);
     if(file_info_status != SUCCESS) {
         display_error(E_NO_SUCH_FILE_OR_DIRECTORY, effective_path, "ls");
@@ -565,7 +529,7 @@ static status_t afcsh_list(char **args, char *cwd) {
     }
 
     if(AFCDirectoryOpen(afc, effective_path, &directory) != MDERR_OK) {
-        fprintf(stderr, "rm: remove failed internally for path %s\n", full_path);
+        (void)fprintf(stderr, "rm: remove failed internally for path %s\n", full_path);
         if(full_path != NULL) free(full_path);
         return AFCSH_EXIT_FAILURE;
     }
@@ -577,7 +541,7 @@ static status_t afcsh_list(char **args, char *cwd) {
             continue;
         }
 
-        fprintf(stdout, "%s\n", entry); 
+        (void)fprintf(stdout, "%s\n", entry); 
     }
 
     if(full_path != NULL) free(full_path);
@@ -587,41 +551,40 @@ static status_t afcsh_list(char **args, char *cwd) {
 
 static status_t afcsh_file(char **args, char *cwd) {
     if(args[1] == NULL) {
-        fprintf(stdout, "usage: file file_path\n");
+        (void)fprintf(stdout, "usage: file file_path\n");
         return AFCSH_EXIT_FAILURE;
     }
 
     char *full_path = create_full_path(args[1], cwd);
-
     struct afc_file_info file_info;
+
     status_t create_file_info_status = create_file_info(&file_info, full_path);
-    
     if(create_file_info_status != SUCCESS) {
         display_error(create_file_info_status, args[1], "file");
         free(full_path);
         return AFCSH_EXIT_FAILURE;
     }
 
-    fprintf(stdout, "Format\t\t| ");
+    (void)fprintf(stdout, "Format\t\t| ");
     switch(file_info.a_st_ifmt) {
         case S_IFREG:
-            fprintf(stdout, "Regular File\n");
+            (void)fprintf(stdout, "Regular File\n");
             break;
         case S_IFDIR:
-            fprintf(stdout, "Directory\n");
+            (void)fprintf(stdout, "Directory\n");
             break;
         case S_IFLNK:
-            fprintf(stdout, "Symbolic Link\n");
+            (void)fprintf(stdout, "Symbolic Link\n");
             break;
         default:
-            fprintf(stdout, "Unknown\n");
+            (void)fprintf(stdout, "Unknown\n");
     }
 
-    fprintf(stdout, "Links\t\t| %d\n", file_info.a_st_nlink);
-    fprintf(stdout, "Size\t\t| %lu\n", file_info.a_st_size);
-    fprintf(stdout, "Blocks\t\t| %d\n", file_info.a_st_blocks);
-    fprintf(stdout, "Last modified\t| %s", ctime(&file_info.a_st_mtime));
-    fprintf(stdout, "Created\t\t| %s", ctime(&file_info.a_st_birthtime));
+    (void)fprintf(stdout, "Links\t\t| %d\n", file_info.a_st_nlink);
+    (void)fprintf(stdout, "Size\t\t| %lu\n", file_info.a_st_size);
+    (void)fprintf(stdout, "Blocks\t\t| %d\n", file_info.a_st_blocks);
+    (void)fprintf(stdout, "Last modified\t| %s", ctime(&file_info.a_st_mtime));
+    (void)fprintf(stdout, "Created\t\t| %s", ctime(&file_info.a_st_birthtime));
 
     free(full_path);
     return AFCSH_EXIT_SUCCESS;
@@ -629,13 +592,13 @@ static status_t afcsh_file(char **args, char *cwd) {
 
 static status_t afcsh_touch(char **args, char *cwd) {
     if(args[1] == NULL) {
-        fprintf(stdout, "usage: touch file_path\n");
+        (void)fprintf(stdout, "usage: touch file_path\n");
         return AFCSH_EXIT_FAILURE;
     }
 
     status_t status = AFCSH_EXIT_SUCCESS;
-   
     char *full_path = create_full_path(args[1], cwd);
+
     status_t create_file_status = create_file_at_path(NULL, 0, full_path);
     if(create_file_status != SUCCESS) {
         display_error(create_file_status, args[1], "touch");
@@ -648,13 +611,13 @@ static status_t afcsh_touch(char **args, char *cwd) {
 
 static status_t afcsh_make_directory(char **args, char *cwd) {
     if(args[0] == NULL) {
-        fprintf(stdout, "usage: mkdir directory_path\n");
+        (void)fprintf(stdout, "usage: mkdir directory_path\n");
         return AFCSH_EXIT_FAILURE;
     }
 
     status_t status = AFCSH_EXIT_SUCCESS;
+    char *full_path = create_full_path(args[1], cwd);
 
-    char *full_path = create_full_path(args[1], cwd);    
     if(AFCDirectoryCreate(afc, full_path) != MDERR_OK) {
         display_error(E_NO_SUCH_FILE_OR_DIRECTORY, full_path, "mkdir");
         status = AFCSH_EXIT_FAILURE;
@@ -666,7 +629,7 @@ static status_t afcsh_make_directory(char **args, char *cwd) {
 
 static status_t afcsh_copy(char **args, char *cwd) {
     if(args[1] == NULL || args[2] == NULL) {
-        fprintf(stdout, "usage: cp source dest\n");
+        (void)fprintf(stdout, "usage: cp source dest\n");
         return AFCSH_EXIT_FAILURE;
     }
 
@@ -681,12 +644,12 @@ static status_t afcsh_copy(char **args, char *cwd) {
     }
 
     if(file_info.a_st_ifmt == S_IFDIR) {
-        fprintf(stderr, "cp: copying directories is not supported (yet)\n");
+        (void)fprintf(stderr, "cp: copying directories is not supported (yet)\n");
         free(source_path);
         return AFCSH_EXIT_FAILURE; 
     }
 
-    uint8_t *source_data = malloc(file_info.a_st_size * sizeof(uint8_t));
+    uint8_t *source_data = calloc(file_info.a_st_size, sizeof(uint8_t));
     ASSERT_ALLOC(source_data);
     
     status_t read_file_status = read_file_at_path(source_data, file_info.a_st_size, source_path);
@@ -715,7 +678,7 @@ static status_t afcsh_copy(char **args, char *cwd) {
 
 status_t afcsh_move(char **args, char *cwd) {
     if(args[1] == NULL || args[2] == NULL) {
-        fprintf(stdout, "usage: mv from_path to_path\n");
+        (void)fprintf(stdout, "usage: mv from_path to_path\n");
         return AFCSH_EXIT_FAILURE;
     }
 
@@ -736,15 +699,14 @@ status_t afcsh_move(char **args, char *cwd) {
 
 static status_t afcsh_remove(char **args, char *cwd) {
     if(args[0] == NULL) {
-        fprintf(stdout, "usage: rm file_path\n");
+        (void)fprintf(stdout, "usage: rm file_path\n");
         return AFCSH_EXIT_FAILURE;
     }
 
     status_t status = AFCSH_EXIT_SUCCESS;
-    
     char *full_path = create_full_path(args[1], cwd);
-
     struct afc_file_info file_info;
+
     status_t file_info_status = create_file_info(&file_info, full_path);
     if(file_info_status != SUCCESS) {
         display_error(E_NO_SUCH_FILE_OR_DIRECTORY, args[1], "rm");
@@ -755,14 +717,14 @@ static status_t afcsh_remove(char **args, char *cwd) {
     if(file_info.a_st_ifmt == S_IFDIR) {
         //Count . and .. as no "regular" files 
         if(file_info.a_st_nlink > 2) {
-            fprintf(stderr, "rm: directory has to be empty: %s\n", args[1]);
+            (void)fprintf(stderr, "rm: directory has to be empty: %s\n", args[1]);
             free(full_path);
             return AFCSH_EXIT_FAILURE;
         }
     }
 
     if(AFCRemovePath(afc, full_path) != MDERR_OK) {
-        fprintf(stderr, "rm: remove failed internally for path %s\n", full_path);
+        (void)fprintf(stderr, "rm: remove failed internally for path %s\n", full_path);
         free(full_path);
         return AFCSH_EXIT_FAILURE;
     } 
@@ -773,7 +735,7 @@ static status_t afcsh_remove(char **args, char *cwd) {
 
 static status_t afcsh_download(char **args, char *cwd) {
     if(args[1] == NULL || args[2] == NULL) {
-        fprintf(stdout, "usage: download remote_path local_path\n");
+        (void)fprintf(stdout, "usage: download remote_path local_path\n");
         return AFCSH_EXIT_FAILURE;
     }
 
@@ -788,12 +750,12 @@ static status_t afcsh_download(char **args, char *cwd) {
     }
 
     if(file_info.a_st_ifmt == S_IFDIR) {
-        fprintf(stderr, "download: downloading directories is not supported: %s\n", args[1]);
+        (void)fprintf(stderr, "download: downloading directories is not supported: %s\n", args[1]);
         free(full_path);
         return AFCSH_EXIT_FAILURE; 
     }
 
-    uint8_t *remote_file_buffer = malloc(file_info.a_st_size * sizeof(uint8_t));
+    uint8_t *remote_file_buffer = calloc(file_info.a_st_size, sizeof(uint8_t));
     ASSERT_ALLOC(remote_file_buffer);
 
     status_t read_status = read_file_at_path(remote_file_buffer, file_info.a_st_size, full_path);
@@ -806,16 +768,15 @@ static status_t afcsh_download(char **args, char *cwd) {
     //Open local file
     FILE *local_file = fopen(args[2], "wb");
     if(local_file == NULL) {
-        fprintf(stderr, "download: local file path does not exists or is not accessable\n");
+        (void)fprintf(stderr, "download: local file path does not exists or is not accessable\n");
         free(remote_file_buffer); 
         free(full_path);
         return AFCSH_EXIT_FAILURE;
     }
 
-    printf("Downloading %lu bytes\n", file_info.a_st_size); 
-
-    fwrite(remote_file_buffer, file_info.a_st_size, 1, local_file);
-    fclose(local_file);
+    (void)fprintf(stdout, "Downloading %lu bytes\n", file_info.a_st_size); 
+    (void)fwrite(remote_file_buffer, file_info.a_st_size, 1, local_file);
+    (void)fclose(local_file);
 
     free(remote_file_buffer);
     free(full_path);
@@ -825,7 +786,7 @@ static status_t afcsh_download(char **args, char *cwd) {
 
 static status_t afcsh_upload(char **args, char *cwd) {
     if(args[1] == NULL || args[2] == NULL) {
-        fprintf(stdout, "usage: upload local_path remote_path\n");
+        (void)fprintf(stdout, "usage: upload local_path remote_path\n");
         return AFCSH_EXIT_FAILURE;
     }
 
@@ -834,19 +795,19 @@ static status_t afcsh_upload(char **args, char *cwd) {
     //Open local file
     FILE *local_file = fopen(args[1], "rb");
     if(local_file == NULL) {
-        fprintf(stderr, "upload: local file path does not exists or is not accessable\n");
+        (void)fprintf(stderr, "upload: local file path does not exists or is not accessable\n");
         free(full_path);
         return AFCSH_EXIT_FAILURE;
     }
 
     struct stat st;
-    fstat(fileno(local_file), &st);
+    (void)fstat(fileno(local_file), &st);
 
-    uint8_t *local_file_buffer = malloc(st.st_size * sizeof(uint8_t));
+    uint8_t *local_file_buffer = calloc(st.st_size, sizeof(uint8_t));
     ASSERT_ALLOC(local_file_buffer);
 
-    fread(local_file_buffer, st.st_size, 1, local_file);
-    fclose(local_file);
+    (void)fread(local_file_buffer, st.st_size, 1, local_file);
+    (void)fclose(local_file);
 
     status_t create_file_status = create_file_at_path(local_file_buffer, st.st_size, full_path);
     if(create_file_status != SUCCESS) {
@@ -856,7 +817,7 @@ static status_t afcsh_upload(char **args, char *cwd) {
         return AFCSH_EXIT_FAILURE;
     }
 
-    fprintf(stdout, "Wrote %lld bytes\n", st.st_size);
+    (void)fprintf(stdout, "Wrote %lld bytes\n", st.st_size);
     
     free(full_path);
     free(local_file_buffer);
@@ -869,7 +830,7 @@ static status_t afcsh_exit(char **args, char *cwd) {
 }
 
 static status_t afcsh_clear(char **args, char *cwd) {
-    system("clear");
+    (void)system("clear");
     return AFCSH_EXIT_SUCCESS;
 }
 

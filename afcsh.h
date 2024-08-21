@@ -38,7 +38,7 @@ static void afcsh_loop(void);
 static int afcsh_num_commands(void);
 static int afcsh_execute(char **args, char *cwd);
 
-static char *create_full_path(char *filename, char *cwd);
+static char *create_full_path(const char *filename, const char *cwd);
 
 static status_t read_file_at_path(uint8_t *bytes, size_t size, const char *path);
 static status_t create_file_info(afc_file_info *file_info, const char *path);

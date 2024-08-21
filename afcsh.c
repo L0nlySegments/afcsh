@@ -147,7 +147,7 @@ static char *read_line(void) {
 }
 
 static char **split_line(char *line) {
-    int token_capacity = AFCSH_TOK_BUFSIZE, position = 0;
+    size_t token_capacity = AFCSH_TOK_BUFSIZE, position = 0;
     
     char **tokens = calloc(token_capacity, sizeof(char*));
     ASSERT_ALLOC(tokens);
@@ -396,11 +396,10 @@ static void afcsh_loop(void) {
 }
 
 
-//TODO: Fix bug with multiple /../..
-static char *create_full_path(char *filename, char *cwd) {
+static char *create_full_path(const char *filename, const char *cwd) {
     size_t len_filename = strlen(filename), len_cwd = strlen(cwd);
 
-    char *full_path = calloc(AFCSH_CWD_BUFSIZE, sizeof(char));
+    char *full_path = calloc(AFCSH_CWD_BUFSIZE + 1, sizeof(char));
     ASSERT_ALLOC(full_path);
     
     //If path starts with '/', use the absolute path
@@ -427,7 +426,7 @@ static char *create_full_path(char *filename, char *cwd) {
     size_t num_tokens = 0;
     char **tokens = tokenize_path(full_path, &num_tokens);
 
-    char *new_path = calloc(AFCSH_CWD_BUFSIZE, sizeof(char));
+    char *new_path = calloc(AFCSH_CWD_BUFSIZE + 1, sizeof(char));
     ASSERT_ALLOC(new_path); 
 
     (void)strcpy(new_path, PATH_DELIM);
@@ -441,21 +440,37 @@ static char *create_full_path(char *filename, char *cwd) {
             if(is_last && num_tokens != 1) {
                 new_path = rtrim(new_path, 1);
             }
+
+            tokens[i] = NULL;
             continue;
         }
 
         if(strcmp(tokens[i], "..") == 0) {
             if(i == 0) continue;
 
-            if(strcmp(tokens[i - 1], "..") != 0 && strcmp(tokens[i - 1], ".") != 0) {
-                size_t len_last = strlen(tokens[i - 1]);
-                new_path = rtrim(new_path, len_last + 1); //Account for the '/'
-
-                //Special case e.g "/test/test2/.." needs to trim trailing '/'
-                if(is_last && i != 1) {
-                    new_path = rtrim(new_path, 1);
-                }
+            char *last_token = NULL;
+            int position = i, dec = 1;
+            while(last_token == NULL && position > 0) {
+                last_token = tokens[position - dec];
+                
+                position--;
+                dec++;
             }
+
+            //We reached the root of this path
+            if(last_token == NULL) {
+                break;
+            }
+
+            new_path = rtrim(new_path, strlen(last_token) + 1); //Account for the '/'
+
+            //Special case e.g "/test/test2/.." needs to trim trailing '/'
+            if(is_last && i != 1) {
+                new_path = rtrim(new_path, 1);
+            }
+
+
+            tokens[i] = NULL;
             continue;
         }
 
@@ -472,6 +487,10 @@ static char *create_full_path(char *filename, char *cwd) {
             (void)strcat(new_path, PATH_DELIM);
         }
     }
+
+    //Re append '/' if we reached the root
+    if(new_path[0] == '\0')
+        (void)strcpy(new_path, JAILED_DIR);
 
     free(tokens);
     free(full_path);

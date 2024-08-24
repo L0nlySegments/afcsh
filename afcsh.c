@@ -11,6 +11,8 @@
 #include "core_foundation_utils.h"
 #include "ext_string.h"
 
+#define VERSION "1.0.0"
+
 #define ASSERT_ALLOC(ptr) if(ptr == NULL) { (void)fprintf(stderr, "afcsh: allocation error\n"); exit(EXIT_FAILURE); }
 #define ASSERT_OVERFLOW() (void)fprintf(stderr, "afcsh: value is too large for assigned buffer\n"); exit(EXIT_FAILURE);
 #define ASSERT_MD_ERROR(ret) if(ret != MDERR_OK) { (void)fprintf(stderr, "afcsh: mobile device framework error\n"); exit(EXIT_FAILURE); }
@@ -68,8 +70,8 @@ char *afcsh_cmd_str[] = {
   "cp",
   "mv",
   "rm",
-  "download",
-  "upload",
+  "dl",
+  "ul",
   "exit",
   "clear",
   "help"
@@ -489,8 +491,9 @@ static char *create_full_path(const char *filename, const char *cwd) {
     }
 
     //Re append '/' if we reached the root
-    if(new_path[0] == '\0')
+    if(new_path[0] == '\0') {
         (void)strcpy(new_path, JAILED_DIR);
+    }
 
     free(tokens);
     free(full_path);
@@ -854,8 +857,21 @@ static status_t afcsh_clear(char **args, char *cwd) {
 }
 
 static status_t afcsh_help(char **args, char *cwd) {
-    char *full_path = create_full_path(args[1], cwd);
-    printf("%s\n", full_path);
-    free(full_path); 
+    fprintf(stdout, "afcsh v%s\n\n", VERSION);
+    fprintf(stdout, "AVAILABLE COMMANDS:\n");
+    fprintf(stdout, "pwd\t\t\t\tPrints the current working directory\n");
+    fprintf(stdout, "cd\t[path]\t\t\tChanges the current working directory\n");
+    fprintf(stdout, "ls\t[path]\t\t\tLists the current working directory or specified path\n");
+    fprintf(stdout, "file\t[path]\t\t\tPrints information about the specified file\n");
+    fprintf(stdout, "touch\t[path]\t\t\tCreates a new empty file\n");
+    fprintf(stdout, "mkdir\t[path]\t\t\tCreates a new directory\n");
+    fprintf(stdout, "rm\t[path]\t\t\tRemoves a file (recursion not supported yet)\n");
+    fprintf(stdout, "cp\t[src]\t[dest]\t\tCopies a file (recursion not supported yet)\n");
+    fprintf(stdout, "mv\t[src]\t[dest]\t\tMoves (or renames) a path\n");
+    fprintf(stdout, "dl\t[src]\t[dest]\t\tDownloads a file to a specified local path\n");
+    fprintf(stdout, "ul\t[src]\t[dest]\t\tUploads a file from a specified local path\n");
+    fprintf(stdout, "exit\t\t\t\tTerminates the current session\n");
+    fprintf(stdout, "clear\t\t\t\tClears the screen\n");
+    fprintf(stdout, "help\t\t\t\tShows this help screen\n");
     return AFCSH_EXIT_SUCCESS;
 }

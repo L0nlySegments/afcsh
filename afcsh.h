@@ -24,7 +24,7 @@
 static void device_notification_callback(am_device_notification_callback_info *info, void *unused);
 
 /* Shell helpers */
-static char *read_line(void);
+static char *read_line(size_t *line_capacity);
 static char **split_line(char *line);
 static char **tokenize_path(char *path, size_t *num_tokens);
 

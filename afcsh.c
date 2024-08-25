@@ -131,12 +131,11 @@ static void device_notification_callback(am_device_notification_callback_info *i
 }
 
 
-static char *read_line(void) {
-    size_t line_capacity = AFCSH_RL_BUFSIZE;
+static char *read_line(size_t *line_capacity) {
     char *line_buffer = NULL;
 
     //Get one line from stdin (for valid delimiters see "man getline")
-    if(getline(&line_buffer, &line_capacity, stdin) == -1){
+    if(getline(&line_buffer, line_capacity, stdin) == -1){
         if(feof(stdin)) {
             exit(EXIT_SUCCESS);
         } else {
@@ -359,6 +358,7 @@ static int afcsh_execute(char **args, char *cwd) {
 
 static void afcsh_loop(void) {
 
+    //Initialize and set the current working directory
     char *cwd = calloc(AFCSH_CWD_BUFSIZE + 1, sizeof(char));
     ASSERT_ALLOC(cwd);
 
@@ -366,16 +366,20 @@ static void afcsh_loop(void) {
 
     bool execute = true;
     do {
+        size_t line_capacity = AFCSH_RL_BUFSIZE;
+
         char *shell_prefix = get_shell_prefix(device_name, cwd);  
         (void)printf("%s", shell_prefix);
 
-        char *line = read_line();
-        if(strlen(line) > AFCSH_RL_BUFSIZE) {
+        char *line = read_line(&line_capacity);
+        if(line_capacity > AFCSH_RL_BUFSIZE) {
             (void)fprintf(stderr, "afcsh: command too long\n");
+            free(line);
             continue;
         }
 
         char **args = split_line(line);
+
         status_t status = afcsh_execute(args, cwd);
         switch(status) {
             case AFCSH_QUIT:
@@ -857,21 +861,21 @@ static status_t afcsh_clear(char **args, char *cwd) {
 }
 
 static status_t afcsh_help(char **args, char *cwd) {
-    fprintf(stdout, "afcsh v%s\n\n", VERSION);
-    fprintf(stdout, "AVAILABLE COMMANDS:\n");
-    fprintf(stdout, "pwd\t\t\t\tPrints the current working directory\n");
-    fprintf(stdout, "cd\t[path]\t\t\tChanges the current working directory\n");
-    fprintf(stdout, "ls\t[path]\t\t\tLists the current working directory or specified path\n");
-    fprintf(stdout, "file\t[path]\t\t\tPrints information about the specified file\n");
-    fprintf(stdout, "touch\t[path]\t\t\tCreates a new empty file\n");
-    fprintf(stdout, "mkdir\t[path]\t\t\tCreates a new directory\n");
-    fprintf(stdout, "rm\t[path]\t\t\tRemoves a file (recursion not supported yet)\n");
-    fprintf(stdout, "cp\t[src]\t[dest]\t\tCopies a file (recursion not supported yet)\n");
-    fprintf(stdout, "mv\t[src]\t[dest]\t\tMoves (or renames) a path\n");
-    fprintf(stdout, "dl\t[src]\t[dest]\t\tDownloads a file to a specified local path\n");
-    fprintf(stdout, "ul\t[src]\t[dest]\t\tUploads a file from a specified local path\n");
-    fprintf(stdout, "exit\t\t\t\tTerminates the current session\n");
-    fprintf(stdout, "clear\t\t\t\tClears the screen\n");
-    fprintf(stdout, "help\t\t\t\tShows this help screen\n");
+    (void)fprintf(stdout, "afcsh v%s\n\n", VERSION);
+    (void)fprintf(stdout, "AVAILABLE COMMANDS:\n");
+    (void)fprintf(stdout, "pwd\t\t\t\tPrints the current working directory\n");
+    (void)fprintf(stdout, "cd\t[path]\t\t\tChanges the current working directory\n");
+    (void)fprintf(stdout, "ls\t[path]\t\t\tLists the current working directory or specified path\n");
+    (void)fprintf(stdout, "file\t[path]\t\t\tPrints information about the specified file\n");
+    (void)fprintf(stdout, "touch\t[path]\t\t\tCreates a new empty file\n");
+    (void)fprintf(stdout, "mkdir\t[path]\t\t\tCreates a new directory\n");
+    (void)fprintf(stdout, "rm\t[path]\t\t\tRemoves a file (recursion not supported yet)\n");
+    (void)fprintf(stdout, "cp\t[src]\t[dest]\t\tCopies a file (recursion not supported yet)\n");
+    (void)fprintf(stdout, "mv\t[src]\t[dest]\t\tMoves (or renames) a path\n");
+    (void)fprintf(stdout, "dl\t[src]\t[dest]\t\tDownloads a file to a specified local path\n");
+    (void)fprintf(stdout, "ul\t[src]\t[dest]\t\tUploads a file from a specified local path\n");
+    (void)fprintf(stdout, "exit\t\t\t\tTerminates the current session\n");
+    (void)fprintf(stdout, "clear\t\t\t\tClears the screen\n");
+    (void)fprintf(stdout, "help\t\t\t\tShows this help screen\n");
     return AFCSH_EXIT_SUCCESS;
 }

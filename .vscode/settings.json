@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "notes": "plaintext",
+        "afcsh_commands.h": "c",
+        "stat.h": "c"
+    }
+}

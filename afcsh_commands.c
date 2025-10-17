@@ -50,7 +50,7 @@ extern status_t afcsh_list(char **args, char *cwd) {
     }
 
     if(AFCDirectoryOpen(afc, effective_path, &directory) != MDERR_OK) {
-        (void)fprintf(stderr, "rm: remove failed internally for path %s\n", full_path);
+        (void)fprintf(stderr, "ls: list failed internally for path %s\n", full_path);
         if(full_path != NULL) free(full_path);
         return AFCSH_EXIT_FAILURE;
     }
